@@ -1,0 +1,70 @@
+name: Update Knowledge Base
+
+# ==============================================================================
+# Scheduled and On-Demand Knowledge Base Ingestion Pipeline
+# 
+# Schedule: Runs daily at 02:00 UTC (configured via cron expression).
+# Manual Trigger: Supported via workflow_dispatch with optional parameters.
+# Persistence Note: Because GitHub Actions runners are ephemeral virtual machines,
+# this workflow connects directly to the same hosted persistent ChromaDB instance
+# (or Chroma Cloud / hosted server) used by the live Streamlit Community Cloud app.
+# ==============================================================================
+
+on:
+  schedule:
+    # Daily at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force_reindex:
+        description: 'Force re-chunking and re-embedding even if content hash is unchanged'
+        required: false
+        type: boolean
+        default: false
+      sources_config:
+        description: 'Path to sources configuration manifest'
+        required: false
+        type: string
+        default: 'scripts/sample_sources.json'
+
+jobs:
+  update-kb:
+    name: Ingest and Refresh Knowledge Base
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Knowledge Base Ingestion
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ADMIN_SECRET: ${{ secrets.ADMIN_SECRET }}
+          CHROMA_ADAPTER_TYPE: ${{ secrets.CHROMA_ADAPTER_TYPE || 'http' }}
+          CHROMA_HOST: ${{ secrets.CHROMA_HOST }}
+          CHROMA_PORT: ${{ secrets.CHROMA_PORT || '8000' }}
+          CHROMA_SSL: ${{ secrets.CHROMA_SSL || 'true' }}
+          CHROMA_AUTH_TOKEN: ${{ secrets.CHROMA_AUTH_TOKEN }}
+          CHROMA_COLLECTION_NAME: ${{ secrets.CHROMA_COLLECTION_NAME || 'dynamic_kb' }}
+          EMBEDDING_PROVIDER: ${{ secrets.EMBEDDING_PROVIDER || 'sentence-transformers' }}
+        run: |
+          FLAGS=""
+          if [ "${{ github.event.inputs.force_reindex }}" = "true" ]; then
+            FLAGS="--force-reindex"
+          fi
+          
+          CONFIG_FILE="${{ github.event.inputs.sources_config || 'scripts/sample_sources.json' }}"
+          echo "Executing scheduled ingestion using manifest: $CONFIG_FILE $FLAGS"
+          python scripts/ingest_sources.py --config "$CONFIG_FILE" $FLAGS --query "What is retrieval augmented generation?"
